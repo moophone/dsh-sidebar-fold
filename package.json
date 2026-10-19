@@ -10,6 +10,7 @@
     "ui"
   ],
   "license": "MIT",
+  "type": "module",
   "main": "./host/index.js",
   "exports": {
     ".": "./host/index.js",
