@@ -1,0 +1,48 @@
+{
+  "name": "dsh-sidebar-fold",
+  "version": "0.1.0",
+  "description": "把 DSH 侧边栏的全局面板行折叠成一个「插件大全」入口，恢复工作区可视高度。纯客户端插件，零依赖，不需要构建链。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "sidebar",
+    "ui"
+  ],
+  "license": "MIT",
+  "main": "./host/index.js",
+  "exports": {
+    ".": "./host/index.js",
+    "./client": "./client/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "client",
+    "host",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/you/dsh-sidebar-fold.git"
+  },
+  "bugs": {
+    "url": "https://github.com/you/dsh-sidebar-fold/issues"
+  },
+  "homepage": "https://github.com/you/dsh-sidebar-fold#readme",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "external": [
+        "react"
+      ],
+      "inject": []
+    }
+  }
+}
