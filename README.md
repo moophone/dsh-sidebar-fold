@@ -37,7 +37,7 @@ dsh plugin --profile <name> add dsh-sidebar-fold
 
 ```sh
 # GitHub 源码安装（会自动跑 prepare；本包无需构建，pnpm 不会要求授权）
-dsh plugin --profile <name> add github:you/dsh-sidebar-fold
+dsh plugin --profile <name> add github:moophone/dsh-sidebar-fold
 
 # 本地开发
 dsh plugin --profile <name> add link:/abs/path/to/dsh-sidebar-fold

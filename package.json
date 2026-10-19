@@ -26,12 +26,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/you/dsh-sidebar-fold.git"
+    "url": "git+https://github.com/moophone/dsh-sidebar-fold.git"
   },
   "bugs": {
-    "url": "https://github.com/you/dsh-sidebar-fold/issues"
+    "url": "https://github.com/moophone/dsh-sidebar-fold/issues"
   },
-  "homepage": "https://github.com/you/dsh-sidebar-fold#readme",
+  "homepage": "https://github.com/moophone/dsh-sidebar-fold#readme",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
