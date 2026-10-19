@@ -1,6 +1,6 @@
 {
   "name": "dsh-sidebar-fold",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "把 DSH 侧边栏的全局面板行折叠成一个「插件大全」入口，恢复工作区可视高度。纯客户端插件，零依赖，不需要构建链。",
   "keywords": [
     "dsh",

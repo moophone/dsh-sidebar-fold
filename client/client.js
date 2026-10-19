@@ -11,6 +11,11 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 	var PANEL_ID = "dsh-sidebar-fold";
 	var GLYPH_CLASS = "dsh-fold-glyph";
 	var STORAGE_KEY = "dsh-sidebar-fold:expanded";
+	// 折叠用「标记属性 + !important 样式」，而不是直接写 inline style.display。
+	// 原因：docker / rss / tty / search / agnes 这些插件各自都挂了 MutationObserver
+	// 盯自己那一行的 style，直接改 display 会把它们反复唤醒，来回打架。
+	// 换成一个我们自己独有的属性名，谁也观察不到，也就不可能有回环。
+	var HIDDEN_ATTR = "data-dsh-fold-hidden";
 
 	// 折叠态：true = 侧边栏里展开所有面板行；false = 只留「插件大全」一行。
 	var expanded = readExpanded();
@@ -54,7 +59,7 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 		if (expanded === value) return;
 		expanded = value;
 		writeExpanded(value);
-		applyRowVisibility();
+		applyVisibility();
 		emit();
 	}
 
@@ -85,7 +90,55 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 		return null;
 	}
 
-	function rowOf(wrap) {
+	// ------------------------------------------------------------------
+	// 侧边栏里其实有两类「面板行」。
+	//
+	// 第一类走 slot：sidebar.panellist → 宿主渲染成 <nav> 里的一排 <button>。
+	// 第二类根本不经 slot：插件自己造一个 <div>/<button>，直接插进侧边栏内部
+	// 容器（就是 logoRow 的父节点），排在 nav 前面。这类行既不在 slot 注册表里、
+	// 也不是 nav 的孩子，所以只折叠 nav 的孩子永远折不到它们。
+	//
+	// 现存实例（逐个读源码确认过 dataset 属性名）：
+	//   泡泡猫的影视工具  dataset.dshAgnesStudioEntry   → button.agnes-entry
+	//   今日值得读        data-dsh-rss-entry
+	//   全局搜索…         data-dsh-global-search-entry
+	//   终端              data-dsh-tty-entry
+	//   容器              data-dsh-docker-entry
+	// 统一特征是 dataset 里有一个 /^dsh.*Entry$/ 的键。按特征识别而不是按
+	// 插件名写死：将来再有插件照同样约定插进来，也能自动被收进「插件大全」。
+	// ------------------------------------------------------------------
+
+	function isInjectedEntry(el) {
+		if (!el || el.nodeType !== 1 || !el.dataset) return false;
+		var keys = Object.keys(el.dataset);
+		for (var i = 0; i < keys.length; i++) {
+			if (/^dsh/i.test(keys[i]) && /Entry$/.test(keys[i])) return true;
+		}
+		return false;
+	}
+
+	/** 侧边栏内部容器：logoRow 的父节点（与各插件插入入口时的取法保持一致）。 */
+	function sidebarRoot() {
+		var column = document.querySelector('[data-pane="sidebar"], [class*="sidebarCol"]');
+		if (!column) return null;
+		var logoRow = column.querySelector('[class*="logoRow"]');
+		if (logoRow && logoRow.parentElement) return logoRow.parentElement;
+		return column.firstElementChild || null;
+	}
+
+	/** 插件直接插进侧边栏的入口行，按 DOM 顺序。 */
+	function injectedEntries() {
+		var root = sidebarRoot();
+		if (!root) return [];
+		var out = [];
+		var children = root.children;
+		for (var i = 0; i < children.length; i++) {
+			if (isInjectedEntry(children[i])) out.push(children[i]);
+		}
+		return out;
+	}
+
+	function rowOf(wrap, injected) {
 		if (!wrap || wrap.nodeType !== 1) return null;
 		var btn = null;
 		if (wrap.tagName === "BUTTON") {
@@ -93,42 +146,81 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 		} else if (wrap.querySelector) {
 			btn = wrap.querySelector("button");
 		}
+		// 插件自插的入口有 <div role="button"> 形态，本身可点，没有内层 button。
+		if (!btn && injected) btn = wrap;
 		if (!btn) return null;
-		var label = btn.getAttribute("aria-label");
+		var label = btn.getAttribute("aria-label") || wrap.getAttribute("aria-label");
 		if (!label) {
 			label = (btn.textContent || "").replace(/\s+/g, " ").trim();
+		}
+		var glyphEl = null;
+		try {
+			glyphEl =
+				wrap.querySelector("svg") ||
+				wrap.querySelector('[aria-hidden="true"]') ||
+				wrap.querySelector("img") ||
+				wrap.firstElementChild;
+		} catch (_) {
+			glyphEl = null;
 		}
 		return {
 			btn: btn,
 			wrap: wrap,
 			label: label || "未命名面板",
-			glyphEl: btn.querySelector('[aria-hidden="true"]'),
-			self: !!wrap.querySelector("." + GLYPH_CLASS)
+			glyphEl: glyphEl,
+			injected: !!injected,
+			self: !!(wrap.querySelector && wrap.querySelector("." + GLYPH_CLASS))
 		};
 	}
 
-	/** 侧边栏当前实际存在的所有面板行，按 DOM 顺序。 */
+	/** nav 里由 slot 渲染出来的面板行，按 DOM 顺序。 */
 	function navRows() {
 		var nav = sideNav();
 		if (!nav) return [];
 		var out = [];
 		var children = nav.children;
 		for (var i = 0; i < children.length; i++) {
-			var row = rowOf(children[i]);
+			var row = rowOf(children[i], false);
 			if (row) out.push(row);
 		}
 		return out;
 	}
 
-	// 把除「插件大全」以外的行收起或展开。
+	/** 「插件大全」列出的全部行：插件自插的入口在前，nav 里的 slot 行在后。 */
+	function allRows() {
+		var out = [];
+		var injected = injectedEntries();
+		for (var i = 0; i < injected.length; i++) {
+			var row = rowOf(injected[i], true);
+			if (row) out.push(row);
+		}
+		var rows = navRows();
+		for (var j = 0; j < rows.length; j++) out.push(rows[j]);
+		return out;
+	}
+
 	// 写之前先比对当前值：避免自身写入触发 MutationObserver 造成死循环。
-	function applyRowVisibility() {
+	function setHidden(el, hidden) {
+		if (!el || !el.hasAttribute) return;
+		var has = el.hasAttribute(HIDDEN_ATTR);
+		if (hidden && !has) el.setAttribute(HIDDEN_ATTR, "");
+		else if (!hidden && has) el.removeAttribute(HIDDEN_ATTR);
+	}
+
+	// 兼容老版本写在 inline style 上的折叠状态，重装时一并清掉。
+	function clearLegacyDisplay(el) {
+		if (el && el.style && el.style.display === "none") el.style.display = "";
+	}
+
+	// 把除「插件大全」以外的行收起或展开（两类行一起处理）。
+	function applyVisibility() {
 		var rows = navRows();
 		for (var i = 0; i < rows.length; i++) {
-			var want = rows[i].self || expanded ? "" : "none";
-			if (rows[i].wrap.style.display !== want) {
-				rows[i].wrap.style.display = want;
-			}
+			setHidden(rows[i].wrap, !rows[i].self && !expanded);
+		}
+		var injected = injectedEntries();
+		for (var k = 0; k < injected.length; k++) {
+			setHidden(injected[k], !expanded);
 		}
 	}
 
@@ -136,7 +228,13 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 	function restoreRows() {
 		var rows = navRows();
 		for (var i = 0; i < rows.length; i++) {
-			if (rows[i].wrap.style.display !== "") rows[i].wrap.style.display = "";
+			setHidden(rows[i].wrap, false);
+			clearLegacyDisplay(rows[i].wrap);
+		}
+		var injected = injectedEntries();
+		for (var k = 0; k < injected.length; k++) {
+			setHidden(injected[k], false);
+			clearLegacyDisplay(injected[k]);
 		}
 	}
 
@@ -159,7 +257,7 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 		var run = function () {
 			scheduled = 0;
 			try {
-				applyRowVisibility();
+				applyVisibility();
 			} catch (_) {
 				/* ignore */
 			}
@@ -300,7 +398,7 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 				var alive = true;
 				var refresh = function () {
 					if (!alive) return;
-					var next = navRows();
+					var next = allRows();
 					setState(function (prev) {
 						if (prev.rows.length === next.length) {
 							var same = true;
@@ -338,7 +436,11 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 				});
 			}, []);
 
-			var count = rows.length > 0 ? rows.length - 1 : 0;
+			// 「插件大全」自己也占一行，不计入收纳数量。
+			var count = 0;
+			for (var i = 0; i < rows.length; i++) {
+				if (!rows[i].self) count++;
+			}
 
 			return h(
 				"div",
@@ -474,17 +576,40 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 		// 立刻应用一次折叠，并持续盯住 DOM 变化。
 		var stopWatch = function () {};
 		try {
-			applyRowVisibility();
+			applyVisibility();
 			stopWatch = watchDom(null);
 		} catch (e) {
 			console.warn("[dsh-sidebar-fold] fold watcher failed:", e && e.message);
+		}
+
+		// 自检：4 秒后把真实折叠规模打到控制台，用来确认插件到底有没有生效。
+		// nav 是走 slot 的行数，injected 是插件直接插进侧边栏的行数。
+		try {
+			setTimeout(function () {
+				try {
+					console.info(
+						"[dsh-sidebar-fold] active: expanded=" +
+							expanded +
+							" navRows=" +
+							navRows().length +
+							" injectedRows=" +
+							injectedEntries().length +
+							" rootFound=" +
+							!!sidebarRoot()
+					);
+				} catch (_) {
+					/* ignore */
+				}
+			}, 4000);
+		} catch (_) {
+			/* ignore */
 		}
 
 		var stopLocale = undefined;
 		try {
 			if (locale && typeof locale.subscribe === "function") {
 				stopLocale = locale.subscribe(function () {
-					applyRowVisibility();
+					applyVisibility();
 				});
 			}
 		} catch (_) {
@@ -544,6 +669,7 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 		var style = document.createElement("style");
 		style.id = "dsh-sidebar-fold-style";
 		style.textContent = [
+			"[" + HIDDEN_ATTR + "]{display:none !important}",
 			"." + GLYPH_CLASS + "{display:inline-flex;align-items:center;justify-content:center}",
 			".dsh-fold-panel{display:flex;flex-direction:column;gap:12px;padding:16px;height:100%;overflow:auto;box-sizing:border-box}",
 			".dsh-fold-headrow{display:flex;align-items:center;justify-content:space-between;gap:12px}",
