@@ -6,7 +6,7 @@
 
 ## 效果
 
-折叠前，侧边栏上半部分被 10+ 个插件行占满：
+折叠前，侧边栏上半部分被 11 个面板行占满（本机实测）：
 
 ```
 泡泡猫的影视工具 / 今日值得读 / 全局搜索 / 终端 / 容器 / 插件 / 插件市场
@@ -43,7 +43,7 @@ dsh plugin --profile <name> add github:moophone/dsh-sidebar-fold
 dsh plugin --profile <name> add link:/abs/path/to/dsh-sidebar-fold
 
 # 预打包 tarball（无需任何构建授权）
-dsh plugin --profile <name> add ./dsh-sidebar-fold-0.3.0.tgz
+dsh plugin --profile <name> add ./dsh-sidebar-fold-0.4.0.tgz
 ```
 
 `dsh plugin add` 会自动完成三处登记，不需要手改任何 profile 文件：
@@ -84,9 +84,20 @@ dsh plugin --profile <name> remove dsh-sidebar-fold
 
 ## 排障
 
-装上重启后没反应，打开浏览器控制台：
+装上重启后没反应，先看浏览器控制台：
 
-- 启动约 4 秒后会打印一行自检日志：`[dsh-sidebar-fold] active: expanded=false navRows=6 injectedRows=5 rootFound=true`。`navRows` 是走 slot 的行数，`injectedRows` 是插件直接插进侧边栏的行数，`rootFound` 表示有没有找到侧边栏内部容器。哪个数字是 0，问题就出在哪一层。
+> **失效安全（v0.4.0 起）**：折叠前会先确认能认出「插件大全」自己那一行；认不出就**一行都不隐藏**并放弃折叠。宁可没效果，也绝不把侧边栏清空。
+
+插件还会把运行状态写进 `localStorage` 的 `dsh-sidebar-fold:diag` 键（一段 JSON），不开控制台也能事后取证：
+
+```json
+{"v":"0.4.0","expanded":false,"navRows":7,"injectedRows":5,"rootFound":true,
+ "rows":["泡泡猫的影视工具","今日值得读","全局搜索","终端","容器","*插件大全","插件"]}
+```
+
+`rows` 里带 `*` 的是它自己那一行，`navRows + injectedRows` 应等于 `rows.length`。**这个键根本不存在 = 插件没被加载**，问题在安装/捆绑层，不在折叠逻辑。
+
+- 启动约 4 秒后会打印一行自检日志：`[dsh-sidebar-fold] active: expanded=false navRows=7 injectedRows=5 rootFound=true`。`navRows` 是走 slot 的行数，`injectedRows` 是插件直接插进侧边栏的行数，`rootFound` 表示有没有找到侧边栏内部容器。哪个数字是 0，问题就出在哪一层。
 - 看到 `[dsh-sidebar-fold] host has no slots service — panel folding disabled`：宿主没提供 slots 服务（DSH 版本过旧），插件已主动放弃而不是静默失效。
 - 什么都没有：确认改的是 `dsh` 正在跑的那个 profile（`dsh --profile <name>`），以及确实重启过 GUI。
 - 只折了一部分：说明有插件换了插入手法（不再用 `data-dsh-*-entry` 约定）。把那个元素的外层 HTML（`document.querySelector('[data-pane="sidebar"]').innerHTML` 里带 `Entry` 的那几行）发 issue。
@@ -99,6 +110,13 @@ node --check client/client.js
 ```
 
 改 `client/client.js` 后必须重启 DSH 才会重新加载。
+
+## 更新记录
+
+- **0.4.0** — 失效安全：认不出自己那一行就一行都不折叠；运行状态写入 `localStorage['dsh-sidebar-fold:diag']`，便于事后取证。
+- **0.3.0** — 折叠插件**绕过 slot 直接注入**的侧边栏行（影视工具、今日值得读、全局搜索、终端、容器），按 `data-*Entry` 特征识别；隐藏改用属性 + `!important`，避免与那些插件自带的 `MutationObserver` 互相打架。
+- **0.2.0** — 改为直接读侧边栏实时 DOM，面板列表不再漏掉后注册的插件；点击走真实按钮。
+- **0.1.0** — 首版。
 
 ## License
 
