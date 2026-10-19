@@ -17,6 +17,28 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 	// 换成一个我们自己独有的属性名，谁也观察不到，也就不可能有回环。
 	var HIDDEN_ATTR = "data-dsh-fold-hidden";
 
+	var DIAG_KEY = "dsh-sidebar-fold:diag";
+	var VERSION = "0.4.0";
+
+	// 远程遥测：把运行状态写进 localStorage，方便在拿不到浏览器控制台时
+	// 事后从磁盘上读（Chromium 的 localStorage 值以 UTF-16LE 落在
+	// AppData\Roaming\@deepseek-ai\dsh-desktop\Local Storage\leveldb 下）。
+	// 只写诊断用的几十字节，不含任何用户数据。
+	function diag(patch) {
+		try {
+			var raw = window.localStorage.getItem(DIAG_KEY);
+			var prev = raw ? JSON.parse(raw) : {};
+			if (!prev || typeof prev !== "object") prev = {};
+			for (var k in patch) {
+				if (Object.prototype.hasOwnProperty.call(patch, k)) prev[k] = patch[k];
+			}
+			prev.at = Date.now();
+			window.localStorage.setItem(DIAG_KEY, JSON.stringify(prev));
+		} catch (_) {
+			/* ignore */
+		}
+	}
+
 	// 折叠态：true = 侧边栏里展开所有面板行；false = 只留「插件大全」一行。
 	var expanded = readExpanded();
 	var listeners = [];
@@ -215,8 +237,24 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 	// 把除「插件大全」以外的行收起或展开（两类行一起处理）。
 	function applyVisibility() {
 		var rows = navRows();
+
+		// 安全阀：认不出「自己那一行」时，一行都不隐藏。
+		// 宁可折叠不生效，也绝不能把侧边栏整片弄空。
+		var selfIdx = -1;
+		for (var s = 0; s < rows.length; s++) {
+			if (rows[s].self) {
+				selfIdx = s;
+				break;
+			}
+		}
+		if (selfIdx < 0) {
+			diag({ nav: rows.length, selfRow: "none" });
+			return;
+		}
+
 		for (var i = 0; i < rows.length; i++) {
-			setHidden(rows[i].wrap, !rows[i].self && !expanded);
+			var keep = rows[i].self || rows[i].label === "插件大全";
+			setHidden(rows[i].wrap, !keep && !expanded);
 		}
 		var injected = injectedEntries();
 		for (var k = 0; k < injected.length; k++) {
@@ -528,6 +566,7 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 		}
 		if (alreadyRegistered) {
 			console.warn("[dsh-sidebar-fold] already registered, skipping duplicate apply");
+			diag({ v: VERSION, dup: true });
 			return;
 		}
 
@@ -546,6 +585,7 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 			);
 		} catch (e) {
 			console.warn("[dsh-sidebar-fold] main panel registration failed:", e && e.message);
+			diag({ panelErr: e && e.message });
 		}
 
 		// 侧边栏那一行：order 取足够小的值，排在最前面。
@@ -564,7 +604,11 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 			);
 		} catch (e) {
 			console.warn("[dsh-sidebar-fold] sidebar row registration failed:", e && e.message);
+			diag({ rowErr: e && e.message });
 		}
+
+		// 侧边栏那一行是否真的注册成功，写进遥测，供离线核对。
+		diag({ v: VERSION, rowRegistered: typeof offRow !== "undefined" });
 
 		var locale;
 		try {
@@ -582,21 +626,25 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 			console.warn("[dsh-sidebar-fold] fold watcher failed:", e && e.message);
 		}
 
-		// 自检：4 秒后把真实折叠规模打到控制台，用来确认插件到底有没有生效。
+		// 自检：4 秒后把真实折叠规模写进遥测并打到控制台。
 		// nav 是走 slot 的行数，injected 是插件直接插进侧边栏的行数。
 		try {
 			setTimeout(function () {
 				try {
-					console.info(
-						"[dsh-sidebar-fold] active: expanded=" +
-							expanded +
-							" navRows=" +
-							navRows().length +
-							" injectedRows=" +
-							injectedEntries().length +
-							" rootFound=" +
-							!!sidebarRoot()
-					);
+					var rows = allRows();
+					var labels = [];
+					for (var i = 0; i < rows.length && i < 24; i++) {
+						labels.push((rows[i].self ? "*" : "") + rows[i].label);
+					}
+					diag({
+						v: VERSION,
+						expanded: expanded,
+						navRows: navRows().length,
+						injectedRows: injectedEntries().length,
+						rootFound: !!sidebarRoot(),
+						rows: labels
+					});
+					console.info("[dsh-sidebar-fold] active:", JSON.stringify(labels));
 				} catch (_) {
 					/* ignore */
 				}
