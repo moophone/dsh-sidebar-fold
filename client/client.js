@@ -157,7 +157,11 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 			/* layout 不可用时退化成纯折叠 */
 		}
 
-		installFoldStyles();
+		try {
+			installFoldStyles();
+		} catch (e) {
+			console.warn("[dsh-sidebar-fold] style injection failed:", e && e.message);
+		}
 
 		// 订阅 sidebar.panellist，实时拿到所有面板行（含我们自己的那行）。
 		function usePanelEntries() {
@@ -295,30 +299,60 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 			return h(FolderGlyph, { size: 16 });
 		}
 
-		// main 面板本体。
-		var offPanel = slots.register(
-			{
-				name: "main",
-				key: PANEL_ID,
-				priority: 0
-			},
-			function () {
-				return h(FoldPanel, null);
+		// 幂等保护：DSH 桌面端会按 dependencies 自动装载插件，profile patch 也可能再装载一次。
+		// 同一 id 重复注册会抛错，进而让整个 web-boot 失败——所以先探测再注册。
+		var alreadyRegistered = false;
+		try {
+			var existing = slots.entriesOfSlot("sidebar.panellist") || [];
+			for (var ei = 0; ei < existing.length; ei++) {
+				var eo = (existing[ei] && existing[ei].options) || {};
+				if (eo.id === PANEL_ID) {
+					alreadyRegistered = true;
+					break;
+				}
 			}
-		);
+		} catch (_) {
+			/* 探测失败就当未注册 */
+		}
+		if (alreadyRegistered) {
+			console.warn("[dsh-sidebar-fold] already registered, skipping duplicate apply");
+			return;
+		}
+
+		// 所有注册都裹 try/catch：插件自身出错只应让功能失效，绝不能让整个应用起不来。
+		var offPanel;
+		try {
+			offPanel = slots.register(
+				{
+					name: "main",
+					key: PANEL_ID,
+					priority: 0
+				},
+				function () {
+					return h(FoldPanel, null);
+				}
+			);
+		} catch (e) {
+			console.warn("[dsh-sidebar-fold] main panel registration failed:", e && e.message);
+		}
 
 		// 侧边栏那一行：order 取足够小的值，排在最前面。
-		var offRow = slots.register(
-			{
-				name: "sidebar.panellist",
-				id: PANEL_ID,
-				order: -1000,
-				label: "插件大全"
-			},
-			function (owner) {
-				return h("span", { className: GLYPH_CLASS }, h(FolderGlyph, { size: (owner && owner.size) || 16 }));
-			}
-		);
+		var offRow;
+		try {
+			offRow = slots.register(
+				{
+					name: "sidebar.panellist",
+					id: PANEL_ID,
+					order: -1000,
+					label: "插件大全"
+				},
+				function (owner) {
+					return h("span", { className: GLYPH_CLASS }, h(FolderGlyph, { size: (owner && owner.size) || 16 }));
+				}
+			);
+		} catch (e) {
+			console.warn("[dsh-sidebar-fold] sidebar row registration failed:", e && e.message);
+		}
 
 		var locale;
 		try {
@@ -328,8 +362,14 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 		}
 
 		// 立刻应用一次折叠，并持续监听侧边栏结构变化（面板行增删、locale 刷新）。
-		applyRowVisibility();
-		var stopWatch = watchRows();
+		var stopWatch = function () {};
+		try {
+			applyRowVisibility();
+			stopWatch = watchRows();
+		} catch (e) {
+			console.warn("[dsh-sidebar-fold] fold watcher failed:", e && e.message);
+		}
+
 		var stopLocale = undefined;
 		try {
 			if (locale && typeof locale.subscribe === "function") {
@@ -341,30 +381,60 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 			stopLocale = undefined;
 		}
 
-		ctx.effect(function () {
-			return function () {
-				// 退场时先恢复被隐藏的行，避免插件禁用后侧边栏空一块。
-				var glyph = document.querySelector("." + GLYPH_CLASS);
-				var nav = glyph && glyph.closest ? glyph.closest("nav") : null;
-				if (nav) {
-					var children = nav.children;
-					for (var i = 0; i < children.length; i++) {
-						if (children[i] && children[i].nodeType === 1) children[i].style.display = "";
-					}
-				}
-				stopWatch();
-				if (typeof stopLocale === "function") stopLocale();
-				if (typeof offRow === "function") offRow();
-				if (typeof offPanel === "function") offPanel();
-				if (layout && layout.panelInfo && layout.panelInfo.getSnapshot().activePanelId === PANEL_ID) {
+		try {
+			ctx.effect(function () {
+				return function () {
+					// 退场时先恢复被隐藏的行，避免插件禁用后侧边栏空一块。
 					try {
-						layout.selectPanel(null);
+						var glyph = document.querySelector("." + GLYPH_CLASS);
+						var nav = glyph && glyph.closest ? glyph.closest("nav") : null;
+						if (nav) {
+							var children = nav.children;
+							for (var i = 0; i < children.length; i++) {
+								if (children[i] && children[i].nodeType === 1) children[i].style.display = "";
+							}
+						}
 					} catch (_) {
 						/* ignore */
 					}
-				}
-			};
-		});
+					try {
+						if (typeof stopWatch === "function") stopWatch();
+					} catch (_) {
+						/* ignore */
+					}
+					if (typeof stopLocale === "function") {
+						try {
+							stopLocale();
+						} catch (_) {
+							/* ignore */
+						}
+					}
+					if (typeof offRow === "function") {
+						try {
+							offRow();
+						} catch (_) {
+							/* ignore */
+						}
+					}
+					if (typeof offPanel === "function") {
+						try {
+							offPanel();
+						} catch (_) {
+							/* ignore */
+						}
+					}
+					try {
+						if (layout && layout.panelInfo && layout.panelInfo.getSnapshot().activePanelId === PANEL_ID) {
+							layout.selectPanel(null);
+						}
+					} catch (_) {
+						/* ignore */
+					}
+				};
+			});
+		} catch (e) {
+			console.warn("[dsh-sidebar-fold] effect registration failed:", e && e.message);
+		}
 	}
 
 	function installFoldStyles() {
@@ -393,7 +463,15 @@ window.__ModuleLoader__.load({ id: "dsh-sidebar-fold", factory: (require) => {
 	var inject = ["slots", "layout", "locale"];
 	var name = "dsh-sidebar-fold";
 
-	exports.apply = apply;
+	// 最后一道兜底：任何时候插件自身出错都只打日志，绝不让异常冒到 boot 层。
+	// 一个可选插件的 bug 不应该让整个应用起不来。
+	exports.apply = function (ctx) {
+		try {
+			apply(ctx);
+		} catch (e) {
+			console.warn("[dsh-sidebar-fold] apply failed, plugin disabled:", e && e.message);
+		}
+	};
 	exports.inject = inject;
 	exports.name = name;
 	return module.exports;
